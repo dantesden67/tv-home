@@ -448,11 +448,20 @@
     focus();
 
     cfg = await loadConfig();
-    if (!cfg) {
+    // Not set up: say whether the service is up (so the PC can send the settings), and wait for them.
+    while (!cfg) {
+      let status;
+      try {
+        const p = await getJSON(SERVICE + '/ping');
+        status = 'Helper running (Node ' + p.node + ', file ' + (p.fileOk ? 'ok' : 'not writable') + '): send the settings from your PC';
+      } catch (e) {
+        status = "Helper not reachable at " + SERVICE + ' (' + (e.message || e) + ')';
+      }
       $('pick-where').textContent = 'Setup';
       $('pick-title').textContent = 'Not set up yet';
-      $('pick-reason').textContent = 'Send the settings from your PC: node tools/push-config.js';
-      return;
+      $('pick-reason').textContent = status + ' · ' + (TIZEN ? 'Tizen apps API available' : 'no Tizen apps API');
+      await new Promise((r) => setTimeout(r, 5000));
+      cfg = await loadConfig();
     }
     const safely = (name, fn) => () => fn().catch((e) => warn(name, e));
     const wx = safely('weather', weather), hm = safely('home', home), tr = safely('trains', trains);
