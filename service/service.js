@@ -6,16 +6,18 @@
  *  - GET  /trains  the next departures, from National Rail (CORS again, and the key stays out of the page)
  *  - GET  /apps, /launch?id=, /icon?id=  the TV's apps, opening one, and its icon (TizenBrew's pages have no
  *         tizen.application, and can't read the icon files)
+ *  - GET  /plexplay?key=&offset=  play a title from the Plex server in the TV's Plex app
  * The settings hold keys, so they never go in the published module.
  */
 // Node's own modules only: TizenBrew's service is bundled, so it can't lend us packages like node-fetch.
 var http = require('http');
 var https = require('https');
 var fs = require('fs');
+var crypto = require('crypto');
 var parse = require('url').parse;
 
-/** GET a JSON document: done(error, body). */
-function getJSON(address, headers, done) {
+/** GET a document as text: done(error, text). */
+function getText(address, headers, done) {
   var u = parse(address);
   var req = (u.protocol === 'https:' ? https : http).request({
     method: 'GET', hostname: u.hostname, port: u.port, path: u.path, headers: headers || {}
@@ -25,12 +27,98 @@ function getJSON(address, headers, done) {
     res.on('data', function (c) { text += c; });
     res.on('end', function () {
       if (res.statusCode < 200 || res.statusCode >= 300) return done(new Error('HTTP ' + res.statusCode + ' from ' + u.hostname));
-      try { done(null, JSON.parse(text)); } catch (e) { done(e); }
+      done(null, text);
     });
   });
   req.on('error', done);
   req.setTimeout(15000, function () { req.abort(); });
   req.end();
+}
+
+/** GET a JSON document: done(error, body). */
+function getJSON(address, headers, done) {
+  getText(address, headers, function (err, text) {
+    if (err) return done(err);
+    try { done(null, JSON.parse(text)); } catch (e) { done(e); }
+  });
+}
+
+/**
+ * Plays something from the Plex server in the TV's Plex app, which is a Plex player listening on port 32500 here
+ * (Plex's remote control). A show plays its next episode (On Deck), else its first. Fails until the app is up.
+ */
+/**
+ * Opens an app, trying each way the TV offers: some apps refuse a plain launch but take an app control, and
+ * Samsung's own remote-control API (port 8001) opens them by their store id. Reports every reason if all fail.
+ */
+function launch(id, res) {
+  var reasons = [];
+  function fail(how) { return function (e) { reasons.push(how + ': ' + (e && (e.message || e.name) || e)); next(); }; }
+  var ways = [
+    function () { tizen.application.launch(id, done, fail('launch')); },
+    function () {
+      tizen.application.launchAppControl(new tizen.ApplicationControl('http://tizen.org/appcontrol/operation/default'),
+        id, done, fail('app control'));
+    },
+    function () {
+      var r = http.request({ method: 'POST', hostname: '127.0.0.1', port: 8001, path: '/api/v2/applications/' + encodeURIComponent(id) },
+        function (answer) {
+          answer.resume();
+          if (answer.statusCode >= 200 && answer.statusCode < 300) done();
+          else fail('remote API')(new Error('HTTP ' + answer.statusCode));
+        });
+      r.on('error', fail('remote API'));
+      r.setTimeout(5000, function () { r.abort(); });
+      r.end();
+    }
+  ];
+  var finished = false;
+  function done() { if (!finished) { finished = true; send(res, 200, { ok: true }); } }
+  function next() {
+    if (finished) return;
+    var way = ways.shift();
+    if (!way) { finished = true; return send(res, 500, { error: reasons.join('; ') }); }
+    try { way(); } catch (e) { fail('error')(e); }
+  }
+  next();
+}
+
+var commandID = 0;
+function plexPlay(req, res) {
+  var p = config && config.plex;
+  if (!p || !p.machineId) return send(res, 404, { error: 'Plex not set up' });
+  var q = require('querystring').parse(req.url.split('?')[1] || '');
+  var server = parse(p.url), json = { Accept: 'application/json' };
+  getJSON(p.url + '/library/metadata/' + q.key + '?includeOnDeck=1&X-Plex-Token=' + p.token, json, function (err, meta) {
+    if (err) return send(res, 502, { error: String(err) });
+    var m = meta.MediaContainer.Metadata[0];
+    if (m.type !== 'show') return play(q.key, +q.offset || 0);
+    var deck = m.OnDeck && m.OnDeck.Metadata && m.OnDeck.Metadata[0];
+    if (deck) return play(deck.ratingKey, deck.viewOffset || 0);
+    getJSON(p.url + '/library/metadata/' + q.key + '/allLeaves?X-Plex-Token=' + p.token, json, function (err2, all) {
+      var first = !err2 && all.MediaContainer.Metadata && all.MediaContainer.Metadata[0];
+      if (!first) return send(res, 502, { error: 'no episodes' });
+      play(first.ratingKey, 0);
+    });
+  });
+
+  function play(key, offset) {
+    getText('http://127.0.0.1:32500/resources', {}, function (err, xml) {
+      if (err) return send(res, 503, { error: 'Plex app not answering yet: ' + err });
+      var player = (/machineIdentifier="([^"]+)"/.exec(xml) || [])[1];
+      if (!player) return send(res, 503, { error: 'no Plex player' });
+      commandID += 1;
+      getText('http://127.0.0.1:32500/player/playback/playMedia?key=' + encodeURIComponent('/library/metadata/' + key) +
+        '&offset=' + offset + '&machineIdentifier=' + p.machineId + '&address=' + server.hostname +
+        '&port=' + (server.port || 32400) + '&protocol=' + server.protocol.replace(':', '') + '&token=' + p.token +
+        '&type=video&commandID=' + commandID,
+        { 'X-Plex-Target-Client-Identifier': player, 'X-Plex-Client-Identifier': 'tv-home-bletchley-01' },
+        function (err3) {
+          if (err3) return send(res, 502, { error: 'Plex app said no: ' + err3 });
+          send(res, 200, { ok: true });
+        });
+    });
+  }
 }
 
 var PORT = 8093;
@@ -120,7 +208,15 @@ http.createServer(function (req, res) {
       return tizen.application.getAppsInfo(function (list) {
         icons = {};
         list.forEach(function (a) { if (a.iconPath) icons[a.id] = a.iconPath.replace(/^file:\/\//, ''); });
-        send(res, 200, list.map(function (a) { return { id: a.id, name: a.name, icon: !!icons[a.id] }; }));
+        // Apps with no icon of their own all get Tizen's pinwheel: an icon that two apps share is that one.
+        var hashes = {}, count = {};
+        Object.keys(icons).forEach(function (id) {
+          try { hashes[id] = crypto.createHash('md5').update(fs.readFileSync(icons[id])).digest('hex'); } catch (e) { return; }
+          count[hashes[id]] = (count[hashes[id]] || 0) + 1;
+        });
+        send(res, 200, list.map(function (a) {
+          return { id: a.id, name: a.name, show: a.show !== false, icon: !!icons[a.id] && !!hashes[a.id] && count[hashes[a.id]] === 1 };
+        }));
       }, function (e) { send(res, 500, { error: String(e) }); });
     } catch (e) { return send(res, 500, { error: String(e) }); }
   }
@@ -140,12 +236,9 @@ http.createServer(function (req, res) {
     });
   }
   if (path === '/launch' && isLocal(req)) {
-    var id = decodeURIComponent((req.url.split('id=')[1] || '').split('&')[0]);
-    try {
-      return tizen.application.launch(id, function () { send(res, 200, { ok: true }); },
-        function (e) { send(res, 500, { error: String(e) }); });
-    } catch (e) { return send(res, 500, { error: String(e) }); }
+    return launch(decodeURIComponent((req.url.split('id=')[1] || '').split('&')[0]), res);
   }
+  if (path === '/plexplay' && isLocal(req)) return plexPlay(req, res);
   if (path === '/home' && isLocal(req)) return home(res);
   if (path === '/trains' && isLocal(req)) return trains(res);
   send(res, 404, { error: 'not found' });
