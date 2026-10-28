@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920, height=1080">
+<title>TV Home</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Manrope:wght@500;600;700;800&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="screen">
+
+  <section id="hero">
+    <img id="backdrop" alt="">
+    <div class="scrim-side"></div>
+    <div class="scrim-bottom"></div>
+
+    <header>
+      <div class="left">
+        <div id="clock">--:--</div>
+        <div id="home" hidden></div>
+      </div>
+      <div class="spacer"></div>
+      <div id="weather" class="info" hidden>
+        <span id="wx-icon"></span>
+        <span id="wx-temp" class="strong"></span>
+        <span id="wx-text" class="muted"></span>
+      </div>
+      <div id="trains" class="info trains" hidden></div>
+    </header>
+
+    <div id="pick">
+      <span id="pick-where" class="where"></span>
+      <h1 id="pick-title"></h1>
+      <p id="pick-reason"></p>
+      <div class="buttons">
+        <button id="pick-open" class="primary focusable" data-zone="hero"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg><span id="pick-open-label">Open</span></button>
+        <button id="pick-next" class="ghost focusable" data-zone="hero">Next pick</button>
+      </div>
+    </div>
+    <div id="dots"></div>
+  </section>
+
+  <div id="rows">
+    <nav id="apps" aria-label="Apps"></nav>
+    <section id="cont" hidden>
+      <h2 id="cont-title">Continue watching</h2>
+      <div id="cont-cards"></div>
+    </section>
+  </div>
+
+  <div id="toast" hidden></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

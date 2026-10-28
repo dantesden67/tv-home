@@ -1,0 +1,15 @@
+{
+  "name": "tv-home",
+  "appName": "TV Home",
+  "version": "0.1.0",
+  "description": "A calm home screen for the TV: picks from your services and servers, Continue watching, weather, trains and who's home.",
+  "packageType": "app",
+  "appPath": "app/index.html",
+  "serviceFile": "service/service.js",
+  "keys": [],
+  "scripts": {
+    "dev": "node tools/dev-server.js",
+    "push": "node tools/push-config.js"
+  },
+  "license": "MIT"
+}
