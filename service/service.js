@@ -90,7 +90,13 @@ http.createServer(function (req, res) {
     });
     return;
   }
+  if (path === '/ping') {
+    var fileOk = true;
+    try { fs.writeFileSync(FILE + '.test', '1'); fs.unlinkSync(FILE + '.test'); } catch (e) { fileOk = false; }
+    return send(res, 200, { ok: true, node: process.version, fileOk: fileOk, hasConfig: !!config });
+  }
   if (path === '/home' && isLocal(req)) return home(res);
   if (path === '/trains' && isLocal(req)) return trains(res);
   send(res, 404, { error: 'not found' });
-}).listen(PORT, '0.0.0.0');
+}).on('error', function (e) { console.log('TV Home service: ' + e); })
+  .listen(PORT, '0.0.0.0');
