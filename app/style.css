@@ -63,18 +63,19 @@ header .spacer { flex-grow: 1; }
 .shelf { display: flex; flex-direction: column; gap: 16px; }
 .shelf h2 { margin: 0; font-family: 'Bricolage Grotesque', sans-serif; font-size: 28px; font-weight: 700; }
 .track { display: flex; gap: 20px; transition: transform 250ms ease; }
-.poster { width: 200px; flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; background: none; border: 0; padding: 0; color: inherit; text-align: left; cursor: pointer; }
-.poster .art { width: 200px; height: 300px; border-radius: 14px; overflow: hidden; background: #1C2433; transition: transform 120ms; }
+.poster { width: 200px; flex-shrink: 0; display: block; background: none; border: 0; padding: 0; color: inherit; text-align: left; cursor: pointer; }
+.poster .art { display: block; width: 200px; height: 300px; border-radius: 14px; overflow: hidden; background: #1C2433; transition: transform 120ms; }
 .poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.poster b { font-size: 17px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.poster b { display: block; width: 200px; margin-top: 10px; font-size: 17px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #apps { display: flex; gap: 18px; }
 #apps { gap: 16px; }
-.app { width: 160px; display: flex; flex-direction: column; gap: 8px; background: none; border: 0; padding: 0; color: var(--muted); cursor: pointer; }
-.app .tile { height: 96px; border-radius: 18px; display: flex; align-items: center; justify-content: center; font-size: 21px; font-weight: 800; overflow: hidden; transition: transform 120ms; }
+/* Sizes on the tile itself: the TV's older Chromium can't lay out a <button> as a flex container. */
+.app { width: 160px; flex-shrink: 0; display: block; background: none; border: 0; padding: 0; color: var(--muted); cursor: pointer; }
+.app .tile { width: 160px; height: 96px; border-radius: 18px; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 800; overflow: hidden; transition: transform 120ms; }
 .app .tile.with-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.app .name { font-size: 16px; font-weight: 600; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app .tile img.logo { width: 62%; height: 50%; object-fit: contain; }
+.app .name { display: block; width: 160px; margin-top: 8px; font-size: 16px; font-weight: 600; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .app.focus .name { color: var(--text); }
-.app .logo { width: 56%; height: 46%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center; -webkit-mask-size: contain; mask-size: contain; }
 
 #cont { display: flex; flex-direction: column; gap: 16px; }
 #cont h2 { margin: 0; font-family: 'Bricolage Grotesque', sans-serif; font-size: 28px; font-weight: 700; }
@@ -102,8 +103,10 @@ header .spacer { flex-grow: 1; }
 #q::placeholder { color: #6B7482; }
 #search-status { margin: 0; font-size: 20px; color: var(--dim); }
 #search-results { display: flex; flex-direction: column; gap: 36px; }
-.poster small { font-size: 15px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: -6px; }
-.search-tile { background: #1E2533; color: var(--text); }
-.search-tile svg { width: 40px; height: 40px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+.poster small { display: block; width: 200px; margin-top: 4px; font-size: 15px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#search-bar { display: block; margin: 4px 0 0 64px; padding: 0; width: 520px; height: 60px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.22); background: rgba(12,16,24,0.6); color: var(--muted); cursor: pointer; transition: transform 120ms; }
+#search-bar .inner { display: flex; align-items: center; gap: 14px; height: 60px; padding: 0 24px; font-size: 20px; font-weight: 600; text-shadow: none; }
+#search-bar svg { width: 26px; height: 26px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+#search-bar.focus { box-shadow: 0 0 0 4px #FFFFFF; color: var(--text); background: rgba(30,37,51,0.9); transform: scale(1.03); }
 
 #toast { position: absolute; z-index: 6; left: 50%; bottom: 48px; transform: translateX(-50%); max-width: 1500px; padding: 14px 26px; border-radius: 14px; background: rgba(20,24,32,0.95); border: 1px solid rgba(255,255,255,0.15); font-size: 20px; }

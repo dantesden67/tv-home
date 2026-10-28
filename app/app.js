@@ -400,7 +400,7 @@
     $('q').blur();
     searchOpen = false;
     $('search').hidden = true;
-    zone = 'apps';
+    zone = 'top';
     idx = 0;
     focus();
   }
@@ -528,18 +528,20 @@
 
   const APPS = [
     // ids: Samsung's app ids, for when the name the TV lists doesn't match (Plex is 3201512006963 on a 2021 QN95A).
-    { name: 'Netflix', match: /^netflix$/i, ids: ['3201907018807', '11101200001'], fg: '#E5484D', bg: '#161616', services: ['Netflix'] },
-    { name: 'Apple TV', match: /^apple ?tv/i, ids: ['3201807016597'], fg: '#111111', bg: '#ECEFF3', services: ['Apple TV+'] },
-    // logo: a Simple Icons logo, used when the TV's own icon is the generic pinwheel or (badIcon) not fit to show.
+    // tvIcon: the TV's own icon is a good one (seen on a QN95A); the others show Tizen's pinwheel or a test card.
+    // logo: a Simple Icons logo, in fg on bg, for those; no logo (BBC iPlayer has none): the name, in fg on bg.
+    { name: 'Netflix', match: /^netflix$/i, ids: ['3201907018807', '11101200001'], tvIcon: true, logo: 'netflix', fg: '#E50914', bg: '#000000', services: ['Netflix'] },
+    { name: 'Apple TV', match: /^apple ?tv/i, ids: ['3201807016597'], tvIcon: true, logo: 'appletv', fg: '#FFFFFF', bg: '#111111', services: ['Apple TV+'] },
     { name: 'Plex', match: /\bplex\b/i, ids: ['3201512006963'], logo: 'plex', fg: '#E5A00D', bg: '#1F1F1F', services: ['Plex'] },
-    { name: 'Jellyfin', match: /jellyfin/i, logo: 'jellyfin', fg: '#B9A6FF', bg: '#1D1740', services: ['Jellyfin'] },
+    { name: 'Jellyfin', match: /jellyfin/i, tvIcon: true, logo: 'jellyfin', fg: '#B9A6FF', bg: '#1D1740', services: ['Jellyfin'] },
     { name: 'BBC iPlayer', match: /iplayer/i, fg: '#FFFFFF', bg: '#E5267E', services: ['BBC iPlayer'] },
-    { name: 'ITVX', match: /^itvx|itv hub/i, logo: 'itvx', fg: '#1A1A1A', bg: '#E6F93C', services: ['ITVX'] },
-    { name: 'Channel 4', match: /^channel ?4|^all ?4/i, logo: 'channel4', badIcon: true, fg: '#FFFFFF', bg: '#23232F', services: ['Channel 4'] },
+    { name: 'ITVX', match: /^itvx|itv hub/i, tvIcon: true, logo: 'itvx', fg: '#1A1A1A', bg: '#E6F93C', services: ['ITVX'] },
+    { name: 'Channel 4', match: /^channel ?4|^all ?4/i, logo: 'channel4', fg: '#FFFFFF', bg: '#23232F', services: ['Channel 4'] },
     { name: 'YouTube', match: /^youtube$/i, logo: 'youtube', fg: '#FFFFFF', bg: '#FF0033', services: [] },
     { name: 'Freesat', id: 'org.tizen.tv-viewer', fg: '#9CC7FF', bg: '#0F2A44', services: [] }
   ];
-  const LOGOS = 'https://cdn.jsdelivr.net/npm/simple-icons@13.21.0/icons/';
+  // Simple Icons, coloured by their CDN: a plain <img> (the TV's Chromium can't tint with CSS masks).
+  const logoURL = (slug, colour) => 'https://cdn.simpleicons.org/' + slug + '/' + colour.replace('#', '');
   const appFor = (service) => APPS.find((a) => a.services.indexOf(service) >= 0) || { name: service };
   /** Whether this TV has the app for a service (anything goes until the TV's app list is known, as on the PC). */
   const canOpen = (service) => !appsKnown || !!appFor(service).id;
@@ -574,11 +576,6 @@
   function renderApps() {
     const box = $('apps');
     box.textContent = '';
-    const s = el('button', 'app focusable', box);
-    s.dataset.zone = 'apps';
-    s.onclick = openSearch;
-    el('span', 'tile search-tile', s).innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>';
-    el('span', 'name', s, 'Search');
     for (const a of APPS) {
       if (appsKnown && !a.id) continue;              // not installed on this TV
       const b = el('button', 'app focusable', box);
@@ -593,15 +590,12 @@
       const logo = () => {
         if (!a.logo) return;
         const im = new Image();
-        im.onload = () => {
-          t.textContent = '';
-          const m = el('span', 'logo', t);
-          m.style.background = a.fg;
-          m.style.webkitMaskImage = m.style.maskImage = 'url(' + im.src + ')';
-        };
-        im.src = LOGOS + a.logo + '.svg';
+        im.alt = '';
+        im.className = 'logo';
+        im.onload = () => { t.textContent = ''; t.appendChild(im); };
+        im.src = logoURL(a.logo, a.fg);
       };
-      if (a.hasIcon && !a.badIcon) {
+      if (a.tvIcon && a.hasIcon) {
         const im = new Image();
         im.alt = '';
         im.onload = () => { t.textContent = ''; t.classList.add('with-icon'); t.appendChild(im); };
@@ -712,7 +706,7 @@
 
   const zones = () => searchOpen
     ? ['search-input'].concat(Array.prototype.map.call(document.querySelectorAll('#search-results .shelf'), (_, n) => 'sr' + n))
-    : ['hero', 'apps', 'cont'].concat(Array.prototype.map.call(document.querySelectorAll('#shelves .shelf'), (_, n) => 'shelf' + n));
+    : ['top', 'hero', 'apps', 'cont'].concat(Array.prototype.map.call(document.querySelectorAll('#shelves .shelf'), (_, n) => 'shelf' + n));
   const inZone = (z) => Array.prototype.filter.call(document.querySelectorAll('.focusable[data-zone="' + z + '"]'), (e) => e.offsetParent !== null);
 
   function focus() {
@@ -784,6 +778,7 @@
     e.preventDefault();
   });
 
+  $('search-bar').onclick = openSearch;
   $('pick-open').onclick = () => {
     if (!picks.length) return;
     const p = picks[pickAt];

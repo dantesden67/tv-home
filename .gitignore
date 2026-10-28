@@ -1,0 +1,4 @@
+# Keys and server addresses: never published
+config.json
+*-token.txt
+node_modules/

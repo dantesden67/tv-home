@@ -203,7 +203,8 @@ http.createServer(function (req, res) {
     return send(res, 200, { ok: true, node: process.version, fileOk: fileOk, hasConfig: !!config });
   }
   // The page can't use tizen.application inside TizenBrew; the service can.
-  if (path === '/apps' && isLocal(req)) {
+  // Readable from the home network too: only app names and ids, for checking which app a tile opens.
+  if (path === '/apps') {
     try {
       return tizen.application.getAppsInfo(function (list) {
         icons = {};
@@ -215,7 +216,7 @@ http.createServer(function (req, res) {
           count[hashes[id]] = (count[hashes[id]] || 0) + 1;
         });
         send(res, 200, list.map(function (a) {
-          return { id: a.id, name: a.name, show: a.show !== false, icon: !!icons[a.id] && !!hashes[a.id] && count[hashes[a.id]] === 1 };
+          return { id: a.id, name: a.name, show: a.show !== false, pkg: a.packageId, icon: !!icons[a.id] && !!hashes[a.id] && count[hashes[a.id]] === 1 };
         }));
       }, function (e) { send(res, 500, { error: String(e) }); });
     } catch (e) { return send(res, 500, { error: String(e) }); }
