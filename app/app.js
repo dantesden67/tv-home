@@ -112,15 +112,23 @@
     const h = await getJSON(SERVICE + '/home');
     const box = $('home');
     box.textContent = '';
-    for (const p of h.people) {
-      const s = el('span', null, box);
-      el('i', 'dot', s).style.background = p.home ? '#7EE0A1' : '#5B6472';
-      s.appendChild(document.createTextNode(p.home ? p.name : p.name + ' · out'));
+    // HOME ● Roland   AWAY ● Martyn   GUESTS ● Ed & Julie · 2 devices: a group only when someone's in it.
+    function group(label, names, colour) {
+      if (!names.length) return;
+      const g = el('span', 'group', box);
+      el('small', null, g, label);
+      for (const n of names) {
+        const s = el('span', null, g);
+        el('i', 'dot', s).style.background = colour;
+        s.appendChild(document.createTextNode(n));
+      }
     }
-    if (h.guests > 0) {
-      const s = el('span', null, box);
-      el('i', 'dot', s).style.background = '#C9A7FF';
-      s.appendChild(document.createTextNode(h.guests === 1 ? '1 guest' : h.guests + ' guests'));
+    group('Home', h.people.filter((p) => p.home).map((p) => p.name), '#7EE0A1');
+    group('Away', h.people.filter((p) => !p.home).map((p) => p.name), '#5B6472');
+    const g = h.guests || {};
+    const devices = g.devices ? g.devices + (g.devices === 1 ? ' device' : ' devices') : '';
+    if (g.mode || g.devices) {
+      group('Guests', [[g.mode ? (g.name || 'Guest staying') : '', devices].filter(Boolean).join(' · ')], '#C9A7FF');
     }
     box.hidden = !box.childNodes.length;
   }
@@ -170,7 +178,8 @@
             all.push({
               src: 'Plex', title: m.title, kind: m.type === 'show' ? 'tv' : 'movie', tmdb: g ? +g.slice(7) : null,
               seen: (m.lastViewedAt || 0) * 1000, added: (m.addedAt || 0) * 1000,
-              img: m.art ? plexImg(m.art, 720, 405) : null
+              img: m.art ? plexImg(m.art, 720, 405) : null,
+              poster: m.thumb ? plexImg(m.thumb, 300, 450) : null
             });
           }
         } catch (e) { warn('Plex library ' + key, e); }
@@ -186,7 +195,8 @@
             tmdb: i.ProviderIds && i.ProviderIds.Tmdb ? +i.ProviderIds.Tmdb : null,
             seen: i.UserData && i.UserData.LastPlayedDate ? Date.parse(i.UserData.LastPlayedDate) : 0,
             added: Date.parse(i.DateCreated) || 0,
-            img: jfImg(i.Id, 'Backdrop')
+            img: jfImg(i.Id, 'Backdrop'),
+            poster: jfImg(i.Id, 'Primary')
           });
         }
       } catch (e) { warn('Jellyfin library', e); }
@@ -256,6 +266,65 @@
     $('cont').hidden = !row.items.length;
   }
 
+  // MARK: - A row per app: new and popular on each service (TMDB), the newest on your servers
+
+  async function makeShelves(lib) {
+    const T = 'https://api.themoviedb.org/3', key = 'api_key=' + cfg.tmdbKey;
+    const region = cfg.region || 'GB', lang = cfg.language || 'en-GB';
+    const since = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10);
+    const rows = {};
+
+    async function onService(name, id) {
+      const get = async (kind) => {
+        const date = kind === 'tv' ? 'first_air_date.gte' : 'primary_release_date.gte';
+        const r = await getJSON(T + '/discover/' + kind + '?' + key + '&language=' + lang + '&watch_region=' + region +
+          '&with_watch_providers=' + id + '&with_watch_monetization_types=flatrate|free|ads&sort_by=popularity.desc&' +
+          date + '=' + since + '&vote_count.gte=10');
+        return r.results.filter((m) => m.poster_path)
+          .map((m) => ({ title: m.title || m.name, img: 'https://image.tmdb.org/t/p/w342' + m.poster_path, app: name }));
+      };
+      try {
+        const both = await Promise.all([get('tv'), get('movie')]);
+        const items = [];
+        for (let i = 0; i < 10; i++) { if (both[0][i]) items.push(both[0][i]); if (both[1][i]) items.push(both[1][i]); }
+        if (items.length) rows[name] = { title: 'New & popular on ' + name, items: items.slice(0, 16) };
+      } catch (e) { warn('row for ' + name, e); }
+    }
+    await Promise.all(Object.keys(cfg.services).filter(canOpen).map((n) => onService(n, cfg.services[n])));
+
+    for (const src of ['Plex', 'Jellyfin'].filter(canOpen)) {
+      const mine = lib.filter((x) => x.src === src && x.poster).sort((a, b) => b.added - a.added).slice(0, 16)
+        .map((x) => ({ title: x.title, img: x.poster, app: src }));
+      if (mine.length) rows[src] = { title: 'New on your ' + src, items: mine };
+    }
+    // In the app row's order: Netflix, Apple TV+, Plex, Jellyfin, iPlayer, ITVX, Channel 4.
+    const order = [];
+    for (const a of APPS) for (const s of a.services) if (rows[s]) order.push(rows[s]);
+    return order;
+  }
+
+  function renderShelves(list) {
+    const box = $('shelves');
+    box.textContent = '';
+    list.forEach((row, n) => {
+      const sec = el('section', 'shelf', box);
+      el('h2', null, sec, row.title);
+      const track = el('div', 'track', sec);
+      for (const it of row.items) {
+        const b = el('button', 'poster focusable', track);
+        b.dataset.zone = 'shelf' + n;
+        b.onclick = () => openApp(it.app);
+        const art = el('div', 'art', b);
+        const im = el('img', null, art);
+        im.alt = '';
+        im.loading = 'lazy';
+        im.src = it.img;
+        im.onerror = () => { im.remove(); };
+        el('b', null, b, it.title);
+      }
+    });
+  }
+
   // MARK: - Picks (TMDB): only what's on your services or your servers
 
   async function makePicks(lib) {
@@ -292,6 +361,39 @@
       if (pop[i]) order.push(pop[i]);
     }
 
+    // A backdrop that's nearly black leaves the top of the screen looking empty: another of the title's, or skip it.
+    const DARK = 45;
+    function luma(url) {
+      return new Promise((resolve) => {
+        const im = new Image();
+        im.crossOrigin = 'anonymous';
+        im.onload = () => {
+          try {
+            const c = document.createElement('canvas');
+            c.width = 32; c.height = 18;
+            const x = c.getContext('2d');
+            x.drawImage(im, 0, 0, 32, 18);
+            const d = x.getImageData(0, 0, 32, 18).data;
+            let sum = 0;
+            for (let i = 0; i < d.length; i += 4) sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+            resolve(sum / (d.length / 4));
+          } catch (e) { resolve(255); }   // can't measure it: keep it
+        };
+        im.onerror = () => resolve(0);
+        im.src = url;
+      });
+    }
+    async function brightBackdrop(kind, id, first) {
+      if (await luma('https://image.tmdb.org/t/p/w300' + first) >= DARK) return first;
+      try {
+        const r = await getJSON(T + '/' + kind + '/' + id + '/images?' + key + '&include_image_language=null,en');
+        for (const b of (r.backdrops || []).slice(0, 5)) {
+          if (b.file_path !== first && await luma('https://image.tmdb.org/t/p/w300' + b.file_path) >= DARK) return b.file_path;
+        }
+      } catch (e) { warn('backdrops', e); }
+      return null;
+    }
+
     const seen = new Set(), out = [];
     for (const c of order) {
       if (out.length >= 6) break;
@@ -310,10 +412,12 @@
           if (hit) where = hit;
         } catch (e) { warn('providers', e); }
       }
-      if (!where) continue;
+      if (!where || !canOpen(where)) continue;
+      const bg = await brightBackdrop(c.kind, c.m.id, c.m.backdrop_path);
+      if (!bg) continue;
       out.push({
         title: c.m.title || c.m.name,
-        backdrop: 'https://image.tmdb.org/t/p/w1280' + c.m.backdrop_path,
+        backdrop: 'https://image.tmdb.org/t/p/w1280' + bg,
         where: where, mine: !!mine,
         reason: c.reason,
         kind: c.kind === 'tv' ? 'Series' : 'Film'
@@ -343,9 +447,10 @@
   // MARK: - Apps on the TV
 
   const APPS = [
-    { name: 'Netflix', match: /^netflix$/i, fg: '#E5484D', bg: '#161616', services: ['Netflix'] },
-    { name: 'Apple TV', match: /^apple ?tv/i, fg: '#111111', bg: '#ECEFF3', services: ['Apple TV+'] },
-    { name: 'Plex', match: /^plex$/i, fg: '#F2B544', bg: '#1C1C1C', services: ['Plex'] },
+    // ids: Samsung's app ids, for when the name the TV lists doesn't match (Plex is 3201512006963 on a 2021 QN95A).
+    { name: 'Netflix', match: /^netflix$/i, ids: ['3201907018807', '11101200001'], fg: '#E5484D', bg: '#161616', services: ['Netflix'] },
+    { name: 'Apple TV', match: /^apple ?tv/i, ids: ['3201807016597'], fg: '#111111', bg: '#ECEFF3', services: ['Apple TV+'] },
+    { name: 'Plex', match: /\bplex\b/i, ids: ['3201512006963'], fg: '#F2B544', bg: '#1C1C1C', services: ['Plex'] },
     { name: 'Jellyfin', match: /jellyfin/i, fg: '#B9A6FF', bg: '#1D1740', services: ['Jellyfin'] },
     { name: 'iPlayer', match: /iplayer/i, fg: '#FFFFFF', bg: '#161616', services: ['BBC iPlayer'] },
     { name: 'ITVX', match: /^itvx|itv hub/i, fg: '#9BF2C8', bg: '#0E2C25', services: ['ITVX'] },
@@ -354,12 +459,14 @@
     { name: 'Freesat', id: 'org.tizen.tv-viewer', fg: '#9CC7FF', bg: '#0F2A44', services: [] }
   ];
   const appFor = (service) => APPS.find((a) => a.services.indexOf(service) >= 0) || { name: service };
+  /** Whether this TV has the app for a service (anything goes until the TV's app list is known, as on the PC). */
+  const canOpen = (service) => !appsKnown || !!appFor(service).id;
 
   function matchApps(list) {
     for (const a of APPS) {
       if (a.id) continue;
-      const hit = list.find((x) => a.match.test(x.name || ''));
-      if (hit) a.id = hit.id;
+      const hit = list.find((x) => (a.ids && a.ids.indexOf(x.id) >= 0) || a.match.test(x.name || ''));
+      if (hit) { a.id = hit.id; a.hasIcon = !!hit.icon; }
     }
   }
 
@@ -387,6 +494,13 @@
       b.style.background = a.bg;
       b.style.color = a.fg;
       b.onclick = () => launch(a);
+      // The app's own icon from the TV; its name in our colours until it loads, or if it can't.
+      if (a.hasIcon) {
+        const im = new Image();
+        im.alt = a.name;
+        im.onload = () => { b.textContent = ''; b.classList.add('with-icon'); b.appendChild(im); };
+        im.src = SERVICE + '/icon?id=' + encodeURIComponent(a.id);
+      }
     }
   }
 
@@ -429,7 +543,7 @@
 
   // MARK: - Remote control
 
-  const ZONES = ['hero', 'apps', 'cont'];
+  const zones = () => ['hero', 'apps', 'cont'].concat(Array.prototype.map.call(document.querySelectorAll('.shelf'), (_, n) => 'shelf' + n));
   const inZone = (z) => Array.prototype.filter.call(document.querySelectorAll('.focusable[data-zone="' + z + '"]'), (e) => e.offsetParent !== null);
 
   function focus() {
@@ -437,14 +551,28 @@
     const list = inZone(zone);
     if (!list.length) return;
     idx = Math.max(0, Math.min(idx, list.length - 1));
-    list[idx].classList.add('focus');
+    const f = list[idx];
+    f.classList.add('focus');
+    // A row longer than the screen slides along to keep the focus in view.
+    const track = f.parentNode;
+    if (track.classList.contains('track')) {
+      let shift = +(track.dataset.shift || 0);
+      if (f.offsetLeft + f.offsetWidth - shift > 1760) shift = f.offsetLeft + f.offsetWidth - 1760;
+      if (f.offsetLeft - shift < 0) shift = f.offsetLeft;
+      track.dataset.shift = shift;
+      track.style.transform = 'translateX(' + (-shift) + 'px)';
+    }
+    // Below Continue watching, the page moves up so the row sits near the top.
+    const shelf = f.closest('.shelf');
+    $('page').style.transform = shelf ? 'translateY(' + (-(shelf.offsetTop - 120)) + 'px)' : '';
   }
 
   function moveZone(d) {
-    let z = ZONES.indexOf(zone);
-    do { z += d; } while (z >= 0 && z < ZONES.length && !inZone(ZONES[z]).length);
-    if (z < 0 || z >= ZONES.length) return;
-    zone = ZONES[z];
+    const all = zones();
+    let z = all.indexOf(zone);
+    do { z += d; } while (z >= 0 && z < all.length && !inZone(all[z]).length);
+    if (z < 0 || z >= all.length) return;
+    zone = all[z];
     idx = 0;
     focus();
   }
@@ -467,12 +595,30 @@
 
   // MARK: - Start
 
+  // The last screen, kept on the TV: shown at once on start while the fresh one loads.
+  const saved = {};
+  function keep(part, value) {
+    saved[part] = value;
+    try { localStorage.setItem('tvhome.screen', JSON.stringify(saved)); } catch (e) {}
+  }
+  function showSaved() {
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem('tvhome.screen') || 'null'); } catch (e) {}
+    if (!s) return;
+    Object.assign(saved, s);
+    if (s.cont) renderContinue(s.cont);
+    if (s.shelves) renderShelves(s.shelves);
+    if (s.picks && s.picks.length) { picks = s.picks; showPick(0); }
+    focus();
+  }
+
   async function refreshContent() {
     const lib = await library();
-    try { renderContinue(await continueRow(lib)); } catch (e) { warn('continue row', e); }
+    try { const row = await continueRow(lib); renderContinue(row); keep('cont', row); } catch (e) { warn('continue row', e); }
+    try { const list = await makeShelves(lib); renderShelves(list); keep('shelves', list); } catch (e) { warn('rows', e); }
     try {
       const fresh = await makePicks(lib);
-      if (fresh.length) { picks = fresh; showPick(0); }
+      if (fresh.length) { picks = fresh; showPick(0); keep('picks', fresh); }
     } catch (e) { warn('picks', e); }
     focus();
   }
@@ -499,7 +645,9 @@
       await new Promise((r) => setTimeout(r, 5000));
       cfg = await loadConfig();
     }
-    if (!appsKnown) findApps(() => { renderApps(); focus(); });   // the service is up now: the real app list
+    showSaved();
+    // The TV's real app list before choosing rows and picks, so none of them is for an app it hasn't got.
+    if (!appsKnown) await new Promise((r) => findApps(() => { renderApps(); focus(); r(); }));
     const safely = (name, fn) => () => fn().catch((e) => warn(name, e));
     const wx = safely('weather', weather), hm = safely('home', home), tr = safely('trains', trains);
     wx(); hm(); tr();
