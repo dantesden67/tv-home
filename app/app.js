@@ -37,7 +37,7 @@
     t.textContent = text;
     t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { t.hidden = true; }, 3000);
+    toastTimer = setTimeout(() => { t.hidden = true; }, text.length > 60 ? 10000 : 3000);
   }
 
   function warn(what, e) { console.warn('[tv-home] ' + what + ':', e && e.message ? e.message : e); }
@@ -179,7 +179,8 @@
               src: 'Plex', title: m.title, kind: m.type === 'show' ? 'tv' : 'movie', tmdb: g ? +g.slice(7) : null,
               seen: (m.lastViewedAt || 0) * 1000, added: (m.addedAt || 0) * 1000,
               img: m.art ? plexImg(m.art, 720, 405) : null,
-              poster: m.thumb ? plexImg(m.thumb, 300, 450) : null
+              poster: m.thumb ? plexImg(m.thumb, 300, 450) : null,
+              ref: { src: 'Plex', id: m.ratingKey }
             });
           }
         } catch (e) { warn('Plex library ' + key, e); }
@@ -196,7 +197,8 @@
             seen: i.UserData && i.UserData.LastPlayedDate ? Date.parse(i.UserData.LastPlayedDate) : 0,
             added: Date.parse(i.DateCreated) || 0,
             img: jfImg(i.Id, 'Backdrop'),
-            poster: jfImg(i.Id, 'Primary')
+            poster: jfImg(i.Id, 'Primary'),
+            ref: { src: 'Jellyfin', id: i.Id, series: i.Type === 'Series' }
           });
         }
       } catch (e) { warn('Jellyfin library', e); }
@@ -217,7 +219,8 @@
             title: ep ? m.grandparentTitle : m.title,
             sub: (ep ? 'S' + m.parentIndex + ' E' + m.index + ' · ' : '') + 'Plex',
             pct: m.duration ? Math.round(100 * (m.viewOffset || 0) / m.duration) : 0,
-            img: plexImg(ep ? (m.grandparentArt || m.art) : m.art, 720, 405), app: 'Plex'
+            img: plexImg(ep ? (m.grandparentArt || m.art) : m.art, 720, 405), app: 'Plex',
+            ref: { src: 'Plex', id: m.ratingKey, offset: m.viewOffset || 0 }
           });
         }
       } catch (e) { warn('Plex on deck', e); }
@@ -232,14 +235,15 @@
             title: ep ? i.SeriesName : i.Name,
             sub: (ep ? 'S' + i.ParentIndexNumber + ' E' + i.IndexNumber + ' · ' : '') + 'Jellyfin',
             pct: Math.round((i.UserData && i.UserData.PlayedPercentage) || 0),
-            img: jfImg(i.ParentBackdropItemId || i.Id, 'Backdrop'), app: 'Jellyfin'
+            img: jfImg(i.ParentBackdropItemId || i.Id, 'Backdrop'), app: 'Jellyfin',
+            ref: { src: 'Jellyfin', id: i.Id, ticks: (i.UserData && i.UserData.PlaybackPositionTicks) || 0 }
           });
         }
       } catch (e) { warn('Jellyfin resume', e); }
     }
     if (items.length) return { title: 'Continue watching', items: items.slice(0, 4) };
     const recent = lib.filter((x) => x.added).sort((a, b) => b.added - a.added).slice(0, 4)
-      .map((x) => ({ title: x.title, sub: x.src, pct: 0, img: x.img, app: x.src }));
+      .map((x) => ({ title: x.title, sub: x.src, pct: 0, img: x.img, app: x.src, ref: x.ref }));
     return { title: 'Recently added', items: recent };
   }
 
@@ -250,7 +254,7 @@
     for (const c of row.items) {
       const b = el('button', 'card focusable', box);
       b.dataset.zone = 'cont';
-      b.onclick = () => openApp(c.app);
+      b.onclick = () => (c.ref ? playOnTV(c.ref, c.title) : openApp(c.app));
       const art = el('div', 'art', b);
       if (c.img) {
         const im = el('img', null, art);
@@ -294,7 +298,7 @@
 
     for (const src of ['Plex', 'Jellyfin'].filter(canOpen)) {
       const mine = lib.filter((x) => x.src === src && x.poster).sort((a, b) => b.added - a.added).slice(0, 16)
-        .map((x) => ({ title: x.title, img: x.poster, app: src }));
+        .map((x) => ({ title: x.title, img: x.poster, app: src, ref: x.ref }));
       if (mine.length) rows[src] = { title: 'New on your ' + src, items: mine };
     }
     // In the app row's order: Netflix, Apple TV+, Plex, Jellyfin, iPlayer, ITVX, Channel 4.
@@ -303,8 +307,10 @@
     return order;
   }
 
-  function renderShelves(list) {
-    const box = $('shelves');
+  /** Poster rows: the home screen's (zones shelf0, shelf1, ...) or the search results' (sr0, ...). */
+  function renderShelves(list, box, prefix) {
+    box = box || $('shelves');
+    prefix = prefix || 'shelf';
     box.textContent = '';
     list.forEach((row, n) => {
       const sec = el('section', 'shelf', box);
@@ -312,8 +318,8 @@
       const track = el('div', 'track', sec);
       for (const it of row.items) {
         const b = el('button', 'poster focusable', track);
-        b.dataset.zone = 'shelf' + n;
-        b.onclick = () => openApp(it.app);
+        b.dataset.zone = prefix + n;
+        b.onclick = () => (it.ref ? playOnTV(it.ref, it.title) : it.app ? openApp(it.app) : toast(it.title + " isn't on your services"));
         const art = el('div', 'art', b);
         const im = el('img', null, art);
         im.alt = '';
@@ -321,8 +327,82 @@
         im.src = it.img;
         im.onerror = () => { im.remove(); };
         el('b', null, b, it.title);
+        if (it.sub) el('small', null, b, it.sub);
       }
     });
+  }
+
+  // MARK: - Search: your servers (from the library already loaded), then TMDB for where else it is
+
+  let libCache = [];
+  let searchOpen = false, searchSeq = 0, searchTimer = 0;
+
+  async function searchFor(q) {
+    const T = 'https://api.themoviedb.org/3', key = 'api_key=' + cfg.tmdbKey;
+    const region = cfg.region || 'GB', lang = cfg.language || 'en-GB';
+    const ql = q.toLowerCase();
+    const owned = new Set(libCache.filter((x) => x.tmdb).map((x) => x.kind + ':' + x.tmdb));
+    const mine = libCache.filter((x) => x.title.toLowerCase().indexOf(ql) >= 0 && canOpen(x.src)).slice(0, 20)
+      .map((x) => ({ title: x.title, img: x.poster, app: x.src, ref: x.ref, sub: 'Your ' + x.src }));
+
+    const r = await getJSON(T + '/search/multi?' + key + '&language=' + lang + '&include_adult=false&query=' + encodeURIComponent(q));
+    const hits = r.results.filter((m) => (m.media_type === 'movie' || m.media_type === 'tv') && m.poster_path &&
+      !owned.has(m.media_type + ':' + m.id)).slice(0, 16);
+    const found = await Promise.all(hits.map(async (m) => {
+      const item = { title: m.title || m.name, img: 'https://image.tmdb.org/t/p/w342' + m.poster_path };
+      try {
+        const p = await getJSON(T + '/' + m.media_type + '/' + m.id + '/watch/providers?' + key);
+        const here = p.results[region] || {};
+        const on = (list) => Object.keys(cfg.services).find((n) => canOpen(n) && (list || []).some((o) => o.provider_id === cfg.services[n]));
+        const paid = on(here.flatrate), free = on(here.free) || on(here.ads);
+        if (paid || free) return Object.assign(item, { app: paid || free, sub: 'On ' + (paid || free) + (paid ? '' : ' · free') });
+      } catch (e) { warn('providers', e); }
+      return Object.assign(item, { sub: 'Not on your services' });
+    }));
+    return [
+      { title: 'On your servers', items: mine },
+      { title: 'On your services', items: found.filter((x) => x.app) },
+      { title: 'Elsewhere', items: found.filter((x) => !x.app) }
+    ].filter((row) => row.items.length);
+  }
+
+  async function runSearch(q) {
+    const seq = ++searchSeq;
+    if (q.trim().length < 2) {
+      $('search-results').textContent = '';
+      $('search-status').textContent = 'Your servers first, then your streaming services.';
+      return;
+    }
+    $('search-status').textContent = 'Searching for "' + q.trim() + '"…';
+    let rows;
+    try { rows = await searchFor(q.trim()); } catch (e) { warn('search', e); rows = null; }
+    if (seq !== searchSeq) return;                   // typed on since
+    if (!rows) { $('search-status').textContent = "Couldn't search just now"; return; }
+    renderShelves(rows, $('search-results'), 'sr');
+    $('search-status').textContent = rows.length ? '' : 'Nothing found for "' + q.trim() + '"';
+  }
+
+  $('q').oninput = () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => runSearch($('q').value), 600);
+  };
+
+  function openSearch() {
+    searchOpen = true;
+    $('search').hidden = false;
+    zone = 'search-input';
+    idx = 0;
+    focus();
+    $('q').focus();                                  // brings up the TV's keyboard
+  }
+
+  function closeSearch() {
+    $('q').blur();
+    searchOpen = false;
+    $('search').hidden = true;
+    zone = 'apps';
+    idx = 0;
+    focus();
   }
 
   // MARK: - Picks (TMDB): only what's on your services or your servers
@@ -418,7 +498,7 @@
       out.push({
         title: c.m.title || c.m.name,
         backdrop: 'https://image.tmdb.org/t/p/w1280' + bg,
-        where: where, mine: !!mine,
+        where: where, mine: !!mine, ref: mine ? mine.ref : null,
         reason: c.reason,
         kind: c.kind === 'tv' ? 'Series' : 'Film'
       });
@@ -450,14 +530,16 @@
     // ids: Samsung's app ids, for when the name the TV lists doesn't match (Plex is 3201512006963 on a 2021 QN95A).
     { name: 'Netflix', match: /^netflix$/i, ids: ['3201907018807', '11101200001'], fg: '#E5484D', bg: '#161616', services: ['Netflix'] },
     { name: 'Apple TV', match: /^apple ?tv/i, ids: ['3201807016597'], fg: '#111111', bg: '#ECEFF3', services: ['Apple TV+'] },
-    { name: 'Plex', match: /\bplex\b/i, ids: ['3201512006963'], fg: '#F2B544', bg: '#1C1C1C', services: ['Plex'] },
-    { name: 'Jellyfin', match: /jellyfin/i, fg: '#B9A6FF', bg: '#1D1740', services: ['Jellyfin'] },
-    { name: 'iPlayer', match: /iplayer/i, fg: '#FFFFFF', bg: '#161616', services: ['BBC iPlayer'] },
-    { name: 'ITVX', match: /^itvx|itv hub/i, fg: '#9BF2C8', bg: '#0E2C25', services: ['ITVX'] },
-    { name: 'Channel 4', match: /^channel ?4|^all ?4/i, fg: '#C7CCFF', bg: '#1E1E28', services: ['Channel 4'] },
-    { name: 'YouTube', match: /^youtube$/i, fg: '#FF6B6B', bg: '#1F1F1F', services: [] },
+    // logo: a Simple Icons logo, used when the TV's own icon is the generic pinwheel or (badIcon) not fit to show.
+    { name: 'Plex', match: /\bplex\b/i, ids: ['3201512006963'], logo: 'plex', fg: '#E5A00D', bg: '#1F1F1F', services: ['Plex'] },
+    { name: 'Jellyfin', match: /jellyfin/i, logo: 'jellyfin', fg: '#B9A6FF', bg: '#1D1740', services: ['Jellyfin'] },
+    { name: 'BBC iPlayer', match: /iplayer/i, fg: '#FFFFFF', bg: '#E5267E', services: ['BBC iPlayer'] },
+    { name: 'ITVX', match: /^itvx|itv hub/i, logo: 'itvx', fg: '#1A1A1A', bg: '#E6F93C', services: ['ITVX'] },
+    { name: 'Channel 4', match: /^channel ?4|^all ?4/i, logo: 'channel4', badIcon: true, fg: '#FFFFFF', bg: '#23232F', services: ['Channel 4'] },
+    { name: 'YouTube', match: /^youtube$/i, logo: 'youtube', fg: '#FFFFFF', bg: '#FF0033', services: [] },
     { name: 'Freesat', id: 'org.tizen.tv-viewer', fg: '#9CC7FF', bg: '#0F2A44', services: [] }
   ];
+  const LOGOS = 'https://cdn.jsdelivr.net/npm/simple-icons@13.21.0/icons/';
   const appFor = (service) => APPS.find((a) => a.services.indexOf(service) >= 0) || { name: service };
   /** Whether this TV has the app for a service (anything goes until the TV's app list is known, as on the PC). */
   const canOpen = (service) => !appsKnown || !!appFor(service).id;
@@ -465,7 +547,12 @@
   function matchApps(list) {
     for (const a of APPS) {
       if (a.id) continue;
-      const hit = list.find((x) => (a.ids && a.ids.indexOf(x.id) >= 0) || a.match.test(x.name || ''));
+      // Several apps can match ("Plex" and a hidden helper of it): the one named exactly so, then one shown in the
+      // TV's own app list, then a known id, then any.
+      const all = list.filter((x) => (a.ids && a.ids.indexOf(x.id) >= 0) || (a.match && a.match.test(x.name || '')));
+      const exact = (x) => (x.name || '').trim().toLowerCase() === a.name.toLowerCase();
+      const hit = all.find((x) => exact(x) && x.show !== false) || all.find(exact) ||
+        all.find((x) => x.show !== false) || all[0];
       if (hit) { a.id = hit.id; a.hasIcon = !!hit.icon; }
     }
   }
@@ -487,20 +574,40 @@
   function renderApps() {
     const box = $('apps');
     box.textContent = '';
+    const s = el('button', 'app focusable', box);
+    s.dataset.zone = 'apps';
+    s.onclick = openSearch;
+    el('span', 'tile search-tile', s).innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>';
+    el('span', 'name', s, 'Search');
     for (const a of APPS) {
       if (appsKnown && !a.id) continue;              // not installed on this TV
-      const b = el('button', 'app focusable', box, a.name);
+      const b = el('button', 'app focusable', box);
       b.dataset.zone = 'apps';
-      b.style.background = a.bg;
-      b.style.color = a.fg;
       b.onclick = () => launch(a);
-      // The app's own icon from the TV; its name in our colours until it loads, or if it can't.
-      if (a.hasIcon) {
+      const t = el('span', 'tile', b, a.name);
+      t.style.background = a.bg;
+      t.style.color = a.fg;
+      el('span', 'name', b, a.name);
+      // The app's own icon from the TV; else its logo on the brand's colour; else its name. The name shows until
+      // an image has loaded, and stays if none can.
+      const logo = () => {
+        if (!a.logo) return;
         const im = new Image();
-        im.alt = a.name;
-        im.onload = () => { b.textContent = ''; b.classList.add('with-icon'); b.appendChild(im); };
+        im.onload = () => {
+          t.textContent = '';
+          const m = el('span', 'logo', t);
+          m.style.background = a.fg;
+          m.style.webkitMaskImage = m.style.maskImage = 'url(' + im.src + ')';
+        };
+        im.src = LOGOS + a.logo + '.svg';
+      };
+      if (a.hasIcon && !a.badIcon) {
+        const im = new Image();
+        im.alt = '';
+        im.onload = () => { t.textContent = ''; t.classList.add('with-icon'); t.appendChild(im); };
+        im.onerror = logo;
         im.src = SERVICE + '/icon?id=' + encodeURIComponent(a.id);
-      }
+      } else logo();
     }
   }
 
@@ -508,7 +615,13 @@
     if (DEV) { toast('On the TV this opens ' + a.name); return; }
     if (!a.id) { toast(appsKnown ? a.name + " isn't installed on this TV" : "Can't open apps yet: the helper isn't running"); return; }
     const failed = () => toast("Couldn't open " + a.name);
-    if (!TIZEN) { getJSON(SERVICE + '/launch?id=' + encodeURIComponent(a.id)).catch(failed); return; }
+    if (!TIZEN) {
+      // The service tries each way to open it; if none works, say why (and which app id), to fix it from.
+      fetch(SERVICE + '/launch?id=' + encodeURIComponent(a.id))
+        .then((r) => r.ok ? null : r.json().then((b) => toast("Couldn't open " + a.name + ' (' + a.id + '): ' + b.error)))
+        .catch(failed);
+      return;
+    }
     try {
       TIZEN.application.launch(a.id, null, failed);
     } catch (e) { failed(); }
@@ -541,9 +654,65 @@
   }
   function openApp(service) { launch(appFor(service)); }
 
+  // MARK: - Playing a title from your own servers: open the app, then have the server start it there
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /** Jellyfin's remote control: once the TV's Jellyfin app shows up as a session, tell it to play. */
+  async function jellyfinPlay(ref) {
+    const j = cfg.jellyfin, h = jfHeaders();
+    let id = ref.id, ticks = ref.ticks || 0;
+    if (ref.series) {   // a series: the next episode to watch, else its first
+      const next = await getJSON(j.url + '/Shows/NextUp?SeriesId=' + id + '&UserId=' + j.userId + '&Limit=1', h);
+      const ep = next.Items[0] || (await getJSON(j.url + '/Shows/' + id + '/Episodes?UserId=' + j.userId + '&Limit=1', h)).Items[0];
+      if (!ep) throw new Error('no episodes');
+      id = ep.Id;
+      ticks = (ep.UserData && ep.UserData.PlaybackPositionTicks) || 0;
+    }
+    const tvIp = cfg.tv && cfg.tv.ip;
+    for (let i = 0; i < 15; i++) {
+      const sessions = await getJSON(j.url + '/Sessions?ActiveWithinSeconds=300', h);
+      const remote = sessions.filter((s) => s.SupportsRemoteControl && s.DeviceId !== 'tv-home-bletchley-01');
+      const s = remote.find((x) => tvIp && (x.RemoteEndPoint || '').indexOf(tvIp) === 0) ||
+        remote.find((x) => /samsung|tizen/i.test((x.DeviceName || '') + ' ' + (x.Client || '')));
+      if (s) {
+        const r = await fetch(j.url + '/Sessions/' + s.Id + '/Playing?playCommand=PlayNow&itemIds=' + id +
+          (ticks ? '&startPositionTicks=' + ticks : ''), { method: 'POST', headers: h });
+        if (!r.ok) throw new Error('Jellyfin answered ' + r.status);
+        return;
+      }
+      await sleep(2000);
+    }
+    throw new Error("the Jellyfin app didn't connect");
+  }
+
+  /** Plex: the service asks the TV's Plex app (a Plex player) to play it, retrying while the app starts. */
+  async function plexPlay(ref) {
+    let last;
+    for (let i = 0; i < 15; i++) {
+      try { await getJSON(SERVICE + '/plexplay?key=' + ref.id + '&offset=' + (ref.offset || 0)); return; } catch (e) { last = e; }
+      await sleep(2000);
+    }
+    throw last;
+  }
+
+  async function playOnTV(ref, title) {
+    launch(appFor(ref.src));
+    if (DEV) return;
+    toast('Starting ' + title + ' in ' + ref.src);
+    try {
+      await (ref.src === 'Jellyfin' ? jellyfinPlay(ref) : plexPlay(ref));
+    } catch (e) {
+      warn('play ' + title, e);
+      toast("Couldn't start " + title + ' by itself: find it in ' + ref.src);
+    }
+  }
+
   // MARK: - Remote control
 
-  const zones = () => ['hero', 'apps', 'cont'].concat(Array.prototype.map.call(document.querySelectorAll('.shelf'), (_, n) => 'shelf' + n));
+  const zones = () => searchOpen
+    ? ['search-input'].concat(Array.prototype.map.call(document.querySelectorAll('#search-results .shelf'), (_, n) => 'sr' + n))
+    : ['hero', 'apps', 'cont'].concat(Array.prototype.map.call(document.querySelectorAll('#shelves .shelf'), (_, n) => 'shelf' + n));
   const inZone = (z) => Array.prototype.filter.call(document.querySelectorAll('.focusable[data-zone="' + z + '"]'), (e) => e.offsetParent !== null);
 
   function focus() {
@@ -562,9 +731,11 @@
       track.dataset.shift = shift;
       track.style.transform = 'translateX(' + (-shift) + 'px)';
     }
-    // Below Continue watching, the page moves up so the row sits near the top.
+    // Below Continue watching (or below the search box), the page moves up so the row sits near the top.
     const shelf = f.closest('.shelf');
-    $('page').style.transform = shelf ? 'translateY(' + (-(shelf.offsetTop - 120)) + 'px)' : '';
+    const page = searchOpen ? $('search-page') : $('page');
+    page.style.transform = shelf ? 'translateY(' + (-(shelf.offsetTop - 120)) + 'px)' : '';
+    $('search-head').classList.toggle('on', zone === 'search-input');
   }
 
   function moveZone(d) {
@@ -577,20 +748,47 @@
     focus();
   }
 
+  // Tizen's on-screen keyboard: Done and Cancel.
+  const IME_DONE = 65376, IME_CANCEL = 65385;
+
   document.addEventListener('keydown', (e) => {
+    // Typing in the search box: the keys are the keyboard's, except leaving it.
+    if (document.activeElement === $('q')) {
+      const k = e.keyCode;
+      if (k === 13 || k === IME_DONE || k === 40) {
+        $('q').blur();
+        clearTimeout(searchTimer);
+        runSearch($('q').value).then(() => moveZone(1));
+      } else if (k === IME_CANCEL || k === 10009 || k === 27) {
+        $('q').blur();
+      } else return;
+      e.preventDefault();
+      return;
+    }
     switch (e.keyCode) {
       case 37: idx--; focus(); break;                                  // left
       case 39: idx++; focus(); break;                                  // right
       case 38: moveZone(-1); break;                                    // up
       case 40: moveZone(1); break;                                     // down
-      case 13: { const f = document.querySelector('.focus'); if (f) f.click(); break; }   // OK
-      case 10009: case 27: case 8: if (zone !== 'hero') { zone = 'hero'; idx = 0; focus(); } break;   // Back
+      case 13: {                                                       // OK
+        const f = document.querySelector('.focus');
+        if (f === $('q')) $('q').focus(); else if (f) f.click();
+        break;
+      }
+      case 10009: case 27: case 8:                                     // Back
+        if (searchOpen) { if (zone === 'search-input') closeSearch(); else { zone = 'search-input'; idx = 0; focus(); } }
+        else if (zone !== 'hero') { zone = 'hero'; idx = 0; focus(); }
+        break;
       default: return;
     }
     e.preventDefault();
   });
 
-  $('pick-open').onclick = () => { if (picks.length) openApp(picks[pickAt].where); };
+  $('pick-open').onclick = () => {
+    if (!picks.length) return;
+    const p = picks[pickAt];
+    if (p.ref) playOnTV(p.ref, p.title); else openApp(p.where);
+  };
   $('pick-next').onclick = () => showPick(pickAt + 1);
 
   // MARK: - Start
@@ -614,6 +812,7 @@
 
   async function refreshContent() {
     const lib = await library();
+    libCache = lib;
     try { const row = await continueRow(lib); renderContinue(row); keep('cont', row); } catch (e) { warn('continue row', e); }
     try { const list = await makeShelves(lib); renderShelves(list); keep('shelves', list); } catch (e) { warn('rows', e); }
     try {
