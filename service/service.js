@@ -7,9 +7,30 @@
  *  - GET  /apps, /launch?id=  the TV's apps, and opening one (TizenBrew's pages have no tizen.application)
  * The settings hold keys, so they never go in the published module.
  */
+// Node's own modules only: TizenBrew's service is bundled, so it can't lend us packages like node-fetch.
 var http = require('http');
+var https = require('https');
 var fs = require('fs');
-var fetch = require('node-fetch');
+var parse = require('url').parse;
+
+/** GET a JSON document: done(error, body). */
+function getJSON(address, headers, done) {
+  var u = parse(address);
+  var req = (u.protocol === 'https:' ? https : http).request({
+    method: 'GET', hostname: u.hostname, port: u.port, path: u.path, headers: headers || {}
+  }, function (res) {
+    var text = '';
+    res.setEncoding('utf8');
+    res.on('data', function (c) { text += c; });
+    res.on('end', function () {
+      if (res.statusCode < 200 || res.statusCode >= 300) return done(new Error('HTTP ' + res.statusCode + ' from ' + u.hostname));
+      try { done(null, JSON.parse(text)); } catch (e) { done(e); }
+    });
+  });
+  req.on('error', done);
+  req.setTimeout(15000, function () { req.abort(); });
+  req.end();
+}
 
 var PORT = 8093;
 var FILE = '/home/owner/share/tv-home-config.json';
@@ -34,9 +55,8 @@ function send(res, code, body) {
 function home(res) {
   var ha = config && config.homeAssistant;
   if (!ha) return send(res, 404, { error: 'Home Assistant not set up' });
-  fetch(ha.url + '/api/states', { headers: { Authorization: 'Bearer ' + ha.token } })
-    .then(function (r) { return r.json(); })
-    .then(function (states) {
+  getJSON(ha.url + '/api/states', { Authorization: 'Bearer ' + ha.token }, function (err, states) {
+      if (err) return send(res, 502, { error: String(err) });
       var people = [], guests = 0;
       states.forEach(function (s) {
         // A person with no tracker (state unknown) isn't anyone to show.
@@ -47,26 +67,20 @@ function home(res) {
         if (ha.guestsEntity && s.entity_id === ha.guestsEntity) guests = parseInt(s.state, 10) || 0;
       });
       send(res, 200, { people: people, guests: guests });
-    })
-    .catch(function (e) { send(res, 502, { error: String(e) }); });
+  });
 }
 
 function trains(res) {
   var t = config && config.trains;
   if (!t || !t.enabled) return send(res, 404, { error: 'Trains not set up' });
-  fetch(t.url + t.from + '?numRows=10&filterCrs=' + t.to + '&filterType=to', { headers: { 'x-apikey': t.token } })
-    .then(function (r) {
-      if (!r.ok) throw new Error('National Rail ' + r.status);
-      return r.json();
-    })
-    .then(function (b) {
+  getJSON(t.url + t.from + '?numRows=10&filterCrs=' + t.to + '&filterType=to', { 'x-apikey': t.token }, function (err, b) {
+      if (err) return send(res, 502, { error: String(err) });
       var departures = (b.trainServices || []).map(function (s) {
         var status = s.etd === 'On time' ? 'On time' : /^\d/.test(s.etd) ? 'Expected ' + s.etd : s.etd;
         return { time: s.std, status: status, late: s.etd !== 'On time' };
       });
       send(res, 200, { to: b.filterLocationName || t.to, departures: departures });
-    })
-    .catch(function (e) { send(res, 502, { error: String(e) }); });
+  });
 }
 
 http.createServer(function (req, res) {
