@@ -13,15 +13,39 @@ function json(res, code, body) {
   res.end(JSON.stringify(body));
 }
 
+// Same answers as service/service.js gives on the TV.
 async function home(res) {
   const ha = settings().homeAssistant;
   if (!ha) return json(res, 404, { error: 'Home Assistant not set up' });
   try {
     const states = await (await fetch(ha.url + '/api/states', { headers: { Authorization: 'Bearer ' + ha.token } })).json();
-    const people = states.filter((s) => s.entity_id.startsWith('person.'))
-      .map((s) => ({ name: s.attributes.friendly_name || s.entity_id.slice(7), home: s.state === 'home' }));
-    const g = ha.guestsEntity && states.find((s) => s.entity_id === ha.guestsEntity);
-    json(res, 200, { people, guests: g ? parseInt(g.state, 10) || 0 : 0 });
+    const people = states.filter((s) => s.entity_id.startsWith('person.') && s.state !== 'unknown' && s.state !== 'unavailable')
+      .map((s) => ({ name: (s.attributes.friendly_name || s.entity_id.slice(7)).split(' ')[0], home: s.state === 'home' }));
+    const state = (id) => { const s = id && states.find((x) => x.entity_id === id); return s ? s.state : null; };
+    const name = state(ha.guestNameEntity);
+    json(res, 200, { people, guests: {
+      mode: state(ha.guestModeEntity) === 'on',
+      name: name && name !== 'unknown' && name !== 'unavailable' ? name : '',
+      devices: parseInt(state(ha.guestsEntity), 10) || 0
+    } });
+  } catch (e) {
+    json(res, 502, { error: String(e) });
+  }
+}
+
+async function trains(res) {
+  const t = settings().trains;
+  if (!t.enabled) return json(res, 404, { error: 'Trains not set up' });
+  try {
+    const r = await fetch(t.url + t.from + '?numRows=10&filterCrs=' + t.to + '&filterType=to', { headers: { 'x-apikey': t.token } });
+    if (!r.ok) return json(res, 502, { error: 'National Rail ' + r.status });
+    const b = await r.json();
+    const departures = (b.trainServices || []).map((s) => ({
+      time: s.std,
+      status: s.etd === 'On time' ? 'On time' : /^\d/.test(s.etd) ? 'Expected ' + s.etd : s.etd,
+      late: s.etd !== 'On time'
+    }));
+    json(res, 200, { to: b.filterLocationName || t.to, departures });
   } catch (e) {
     json(res, 502, { error: String(e) });
   }
@@ -31,6 +55,7 @@ http.createServer((req, res) => {
   const url = req.url.split('?')[0];
   if (url === '/config') return json(res, 200, settings());
   if (url === '/home') return home(res);
+  if (url === '/trains') return trains(res);
   const file = path.normalize(path.join(APP, url === '/' ? 'index.html' : url));
   if (!file.startsWith(APP)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, data) => {
