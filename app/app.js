@@ -176,7 +176,7 @@
           for (const m of d.MediaContainer.Metadata || []) {
             const g = (m.Guid || []).map((x) => x.id).find((id) => id.indexOf('tmdb://') === 0);
             all.push({
-              src: 'Plex', title: m.title, kind: m.type === 'show' ? 'tv' : 'movie', tmdb: g ? +g.slice(7) : null,
+              src: 'Plex', title: m.title, year: m.year || null, kind: m.type === 'show' ? 'tv' : 'movie', tmdb: g ? +g.slice(7) : null,
               seen: (m.lastViewedAt || 0) * 1000, added: (m.addedAt || 0) * 1000,
               img: m.art ? plexImg(m.art, 720, 405) : null,
               poster: m.thumb ? plexImg(m.thumb, 300, 450) : null,
@@ -192,7 +192,7 @@
         const d = await getJSON(j.url + '/Users/' + j.userId + '/Items?Recursive=true&IncludeItemTypes=Movie,Series&Fields=ProviderIds,DateCreated&EnableUserData=true', jfHeaders());
         for (const i of d.Items) {
           all.push({
-            src: 'Jellyfin', title: i.Name, kind: i.Type === 'Series' ? 'tv' : 'movie',
+            src: 'Jellyfin', title: i.Name, year: i.ProductionYear || null, kind: i.Type === 'Series' ? 'tv' : 'movie',
             tmdb: i.ProviderIds && i.ProviderIds.Tmdb ? +i.ProviderIds.Tmdb : null,
             seen: i.UserData && i.UserData.LastPlayedDate ? Date.parse(i.UserData.LastPlayedDate) : 0,
             added: Date.parse(i.DateCreated) || 0,
@@ -204,6 +204,27 @@
       } catch (e) { warn('Jellyfin library', e); }
     }
     return all;
+  }
+
+  /**
+   * What's on the servers, to look a TMDB title up in: by TMDB id, else by title and year, as a server copy that
+   * was never matched to TMDB has no id (Plex had Resident Evil: Welcome to Raccoon City like that).
+   */
+  function ownedIndex(lib) {
+    const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const byId = new Map(), byName = new Map();
+    for (const x of lib) {
+      if (x.tmdb && !byId.has(x.kind + ':' + x.tmdb)) byId.set(x.kind + ':' + x.tmdb, x);
+      const name = x.kind + ':' + norm(x.title) + ':' + (x.year || '');
+      if (!byName.has(name)) byName.set(name, x);
+    }
+    return {
+      /** The server copy of a TMDB result (kind 'movie' or 'tv'), or undefined. */
+      find(kind, m) {
+        const year = (m.release_date || m.first_air_date || '').slice(0, 4);
+        return byId.get(kind + ':' + m.id) || byName.get(kind + ':' + norm(m.title || m.name) + ':' + year);
+      }
+    };
   }
 
   /** Part-watched things on either server; with none, the newest additions. */
@@ -341,13 +362,13 @@
     const T = 'https://api.themoviedb.org/3', key = 'api_key=' + cfg.tmdbKey;
     const region = cfg.region || 'GB', lang = cfg.language || 'en-GB';
     const ql = q.toLowerCase();
-    const owned = new Set(libCache.filter((x) => x.tmdb).map((x) => x.kind + ':' + x.tmdb));
+    const owned = ownedIndex(libCache);
     const mine = libCache.filter((x) => x.title.toLowerCase().indexOf(ql) >= 0 && canOpen(x.src)).slice(0, 20)
       .map((x) => ({ title: x.title, img: x.poster, app: x.src, ref: x.ref, sub: 'Your ' + x.src }));
 
     const r = await getJSON(T + '/search/multi?' + key + '&language=' + lang + '&include_adult=false&query=' + encodeURIComponent(q));
     const hits = r.results.filter((m) => (m.media_type === 'movie' || m.media_type === 'tv') && m.poster_path &&
-      !owned.has(m.media_type + ':' + m.id)).slice(0, 16);
+      !owned.find(m.media_type, m)).slice(0, 16);
     const found = await Promise.all(hits.map(async (m) => {
       const item = { title: m.title || m.name, img: 'https://image.tmdb.org/t/p/w342' + m.poster_path };
       try {
@@ -410,8 +431,7 @@
   async function makePicks(lib) {
     const T = 'https://api.themoviedb.org/3', key = 'api_key=' + cfg.tmdbKey;
     const region = cfg.region || 'GB', lang = cfg.language || 'en-GB';
-    const owned = new Map();
-    for (const x of lib) if (x.tmdb && !owned.has(x.kind + ':' + x.tmdb)) owned.set(x.kind + ':' + x.tmdb, x);
+    const owned = ownedIndex(lib);
 
     // Things like what you watched last, then what's popular on your services lately.
     const cands = [];
@@ -480,7 +500,7 @@
       const id = c.kind + ':' + c.m.id;
       if (seen.has(id) || !c.m.backdrop_path) continue;
       seen.add(id);
-      const mine = owned.get(id);
+      const mine = owned.find(c.kind, c.m);
       if (mine && mine.seen) continue;               // already watched
       let where = mine ? mine.src : null;
       if (!where) {
