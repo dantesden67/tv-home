@@ -402,7 +402,9 @@
 
   // MARK: - TizenBrew: our service's state, and starting it when it isn't running
 
-  const MODULE = { fullName: 'gh/dantesden67/tv-home', serviceFile: 'service/service.js' };
+  // TizenBrew serves us at /module/<the module's name, encoded>/app/index.html: the name it knows us by.
+  const served = location.pathname.split('/')[2];
+  const MODULE = { fullName: served ? decodeURIComponent(served) : 'gh/dantesden67/tv-home@main', serviceFile: 'service/service.js' };
   function brewStatus() {
     return new Promise((resolve) => {
       let ws;
