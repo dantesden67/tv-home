@@ -19,7 +19,7 @@ function settings() {
     language: c.language || 'en-GB',
     place: c.place,
     services: c.services,
-    plex: c.plex ? { url: c.plex.url, token: read(c.plex.tokenFile), libraries: c.plex.libraries } : null,
+    plex: c.plex ? { url: c.plex.url, token: read(c.plex.tokenFile), libraries: c.plex.libraries, machineId: c.plex.machineId } : null,
     jellyfin: c.jellyfin ? { url: c.jellyfin.url, userId: c.jellyfin.userId, token: read(c.jellyfin.tokenFile) } : null,
     homeAssistant: haToken ? {
       url: c.homeAssistant.url, token: haToken,
