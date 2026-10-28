@@ -3,6 +3,7 @@
  *  - GET  /config  the app's settings, to the app only (127.0.0.1)
  *  - POST /config  the settings, sent once from the PC (tools/push-config.js); kept in a file on the TV
  *  - GET  /home    who's home, from Home Assistant (the app can't call it directly: CORS)
+ *  - GET  /trains  the next departures, from National Rail (CORS again, and the key stays out of the page)
  * The settings hold keys, so they never go in the published module.
  */
 var http = require('http');
@@ -37,12 +38,32 @@ function home(res) {
     .then(function (states) {
       var people = [], guests = 0;
       states.forEach(function (s) {
-        if (s.entity_id.indexOf('person.') === 0) {
-          people.push({ name: (s.attributes && s.attributes.friendly_name) || s.entity_id.slice(7), home: s.state === 'home' });
+        // A person with no tracker (state unknown) isn't anyone to show.
+        if (s.entity_id.indexOf('person.') === 0 && s.state !== 'unknown' && s.state !== 'unavailable') {
+          var name = (s.attributes && s.attributes.friendly_name) || s.entity_id.slice(7);
+          people.push({ name: name.split(' ')[0], home: s.state === 'home' });
         }
         if (ha.guestsEntity && s.entity_id === ha.guestsEntity) guests = parseInt(s.state, 10) || 0;
       });
       send(res, 200, { people: people, guests: guests });
+    })
+    .catch(function (e) { send(res, 502, { error: String(e) }); });
+}
+
+function trains(res) {
+  var t = config && config.trains;
+  if (!t || !t.enabled) return send(res, 404, { error: 'Trains not set up' });
+  fetch(t.url + t.from + '?numRows=10&filterCrs=' + t.to + '&filterType=to', { headers: { 'x-apikey': t.token } })
+    .then(function (r) {
+      if (!r.ok) throw new Error('National Rail ' + r.status);
+      return r.json();
+    })
+    .then(function (b) {
+      var departures = (b.trainServices || []).map(function (s) {
+        var status = s.etd === 'On time' ? 'On time' : /^\d/.test(s.etd) ? 'Expected ' + s.etd : s.etd;
+        return { time: s.std, status: status, late: s.etd !== 'On time' };
+      });
+      send(res, 200, { to: b.filterLocationName || t.to, departures: departures });
     })
     .catch(function (e) { send(res, 502, { error: String(e) }); });
 }
@@ -70,5 +91,6 @@ http.createServer(function (req, res) {
     return;
   }
   if (path === '/home' && isLocal(req)) return home(res);
+  if (path === '/trains' && isLocal(req)) return trains(res);
   send(res, 404, { error: 'not found' });
 }).listen(PORT, '0.0.0.0');
