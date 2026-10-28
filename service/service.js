@@ -4,7 +4,8 @@
  *  - POST /config  the settings, sent once from the PC (tools/push-config.js); kept in a file on the TV
  *  - GET  /home    who's home, from Home Assistant (the app can't call it directly: CORS)
  *  - GET  /trains  the next departures, from National Rail (CORS again, and the key stays out of the page)
- *  - GET  /apps, /launch?id=  the TV's apps, and opening one (TizenBrew's pages have no tizen.application)
+ *  - GET  /apps, /launch?id=, /icon?id=  the TV's apps, opening one, and its icon (TizenBrew's pages have no
+ *         tizen.application, and can't read the icon files)
  * The settings hold keys, so they never go in the published module.
  */
 // Node's own modules only: TizenBrew's service is bundled, so it can't lend us packages like node-fetch.
@@ -35,6 +36,7 @@ function getJSON(address, headers, done) {
 var PORT = 8093;
 var FILE = '/home/owner/share/tv-home-config.json';
 var config = null;
+var icons = {};   // app id -> its icon file, from the last /apps
 
 try { config = JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch (e) {}
 
@@ -57,16 +59,18 @@ function home(res) {
   if (!ha) return send(res, 404, { error: 'Home Assistant not set up' });
   getJSON(ha.url + '/api/states', { Authorization: 'Bearer ' + ha.token }, function (err, states) {
       if (err) return send(res, 502, { error: String(err) });
-      var people = [], guests = 0;
+      var people = [], devices = 0, mode = false, name = '';
       states.forEach(function (s) {
         // A person with no tracker (state unknown) isn't anyone to show.
         if (s.entity_id.indexOf('person.') === 0 && s.state !== 'unknown' && s.state !== 'unavailable') {
-          var name = (s.attributes && s.attributes.friendly_name) || s.entity_id.slice(7);
-          people.push({ name: name.split(' ')[0], home: s.state === 'home' });
+          var full = (s.attributes && s.attributes.friendly_name) || s.entity_id.slice(7);
+          people.push({ name: full.split(' ')[0], home: s.state === 'home' });
         }
-        if (ha.guestsEntity && s.entity_id === ha.guestsEntity) guests = parseInt(s.state, 10) || 0;
+        if (s.entity_id === ha.guestsEntity) devices = parseInt(s.state, 10) || 0;
+        if (s.entity_id === ha.guestModeEntity) mode = s.state === 'on';
+        if (s.entity_id === ha.guestNameEntity && s.state !== 'unknown' && s.state !== 'unavailable') name = s.state;
       });
-      send(res, 200, { people: people, guests: guests });
+      send(res, 200, { people: people, guests: { mode: mode, name: name, devices: devices } });
   });
 }
 
@@ -114,9 +118,26 @@ http.createServer(function (req, res) {
   if (path === '/apps' && isLocal(req)) {
     try {
       return tizen.application.getAppsInfo(function (list) {
-        send(res, 200, list.map(function (a) { return { id: a.id, name: a.name }; }));
+        icons = {};
+        list.forEach(function (a) { if (a.iconPath) icons[a.id] = a.iconPath.replace(/^file:\/\//, ''); });
+        send(res, 200, list.map(function (a) { return { id: a.id, name: a.name, icon: !!icons[a.id] }; }));
       }, function (e) { send(res, 500, { error: String(e) }); });
     } catch (e) { return send(res, 500, { error: String(e) }); }
+  }
+  // An app's own icon, read from the TV (the page can't open file:// paths).
+  if (path === '/icon' && isLocal(req)) {
+    var file = icons[decodeURIComponent((req.url.split('id=')[1] || '').split('&')[0])];
+    if (!file) return send(res, 404, { error: 'no icon' });
+    return fs.readFile(file, function (err, data) {
+      if (err) return send(res, 404, { error: 'no icon' });
+      var ext = file.split('.').pop().toLowerCase();
+      res.writeHead(200, {
+        'Content-Type': ext === 'png' ? 'image/png' : ext === 'svg' ? 'image/svg+xml' : 'image/jpeg',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'max-age=86400'
+      });
+      res.end(data);
+    });
   }
   if (path === '/launch' && isLocal(req)) {
     var id = decodeURIComponent((req.url.split('id=')[1] || '').split('&')[0]);
