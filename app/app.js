@@ -355,17 +355,25 @@
   ];
   const appFor = (service) => APPS.find((a) => a.services.indexOf(service) >= 0) || { name: service };
 
+  function matchApps(list) {
+    for (const a of APPS) {
+      if (a.id) continue;
+      const hit = list.find((x) => a.match.test(x.name || ''));
+      if (hit) a.id = hit.id;
+    }
+  }
+
+  let appsKnown = false;
   function findApps(done) {
-    if (!TIZEN) { done(); return; }
+    if (!TIZEN) {
+      if (DEV) { done(); return; }
+      // Inside TizenBrew: the service lists them.
+      getJSON(SERVICE + '/apps').then((list) => { matchApps(list); appsKnown = true; done(); }, () => done());
+      return;
+    }
+    appsKnown = true;
     try {
-      TIZEN.application.getAppsInfo((list) => {
-        for (const a of APPS) {
-          if (a.id) continue;
-          const hit = list.find((x) => a.match.test(x.name || ''));
-          if (hit) a.id = hit.id;
-        }
-        done();
-      }, () => done());
+      TIZEN.application.getAppsInfo((list) => { matchApps(list); done(); }, () => done());
     } catch (e) { done(); }
   }
 
@@ -373,7 +381,7 @@
     const box = $('apps');
     box.textContent = '';
     for (const a of APPS) {
-      if (TIZEN && !a.id) continue;                  // not installed on this TV
+      if (appsKnown && !a.id) continue;              // not installed on this TV
       const b = el('button', 'app focusable', box, a.name);
       b.dataset.zone = 'apps';
       b.style.background = a.bg;
@@ -383,11 +391,37 @@
   }
 
   function launch(a) {
-    if (!TIZEN) { toast('On the TV this opens ' + a.name); return; }
-    if (!a.id) { toast(a.name + " isn't installed on this TV"); return; }
+    if (DEV) { toast('On the TV this opens ' + a.name); return; }
+    if (!a.id) { toast(appsKnown ? a.name + " isn't installed on this TV" : "Can't open apps yet: the helper isn't running"); return; }
+    const failed = () => toast("Couldn't open " + a.name);
+    if (!TIZEN) { getJSON(SERVICE + '/launch?id=' + encodeURIComponent(a.id)).catch(failed); return; }
     try {
-      TIZEN.application.launch(a.id, null, () => toast("Couldn't open " + a.name));
-    } catch (e) { toast("Couldn't open " + a.name); }
+      TIZEN.application.launch(a.id, null, failed);
+    } catch (e) { failed(); }
+  }
+
+  // MARK: - TizenBrew: our service's state, and starting it when it isn't running
+
+  const MODULE = { fullName: 'gh/dantesden67/tv-home', serviceFile: 'service/service.js' };
+  function brewStatus() {
+    return new Promise((resolve) => {
+      let ws;
+      const finish = (text) => { try { ws.close(); } catch (e) {} resolve(text); };
+      setTimeout(() => finish('TizenBrew gave no answer'), 4000);
+      try { ws = new WebSocket('ws://127.0.0.1:8081'); } catch (e) { resolve("Can't reach TizenBrew"); return; }
+      ws.onopen = () => ws.send(JSON.stringify({ type: 7 }));        // GetServiceStatuses
+      ws.onerror = () => finish("Can't reach TizenBrew");
+      ws.onmessage = (m) => {
+        let msg;
+        try { msg = JSON.parse(m.data); } catch (e) { return; }
+        if (msg.type !== 7) return;
+        const mine = (msg.payload || []).find((s) => s.name === MODULE.fullName);
+        if (!mine || mine.hasCrashed) ws.send(JSON.stringify({ type: 6, payload: MODULE }));   // StartService
+        if (!mine) finish('TizenBrew had not started it; asked it to');
+        else if (mine.hasCrashed) finish('it crashed (' + JSON.stringify(mine.error) + '); restarting it');
+        else finish('TizenBrew says it is running');
+      };
+    });
   }
   function openApp(service) { launch(appFor(service)); }
 
@@ -455,14 +489,15 @@
         const p = await getJSON(SERVICE + '/ping');
         status = 'Helper running (Node ' + p.node + ', file ' + (p.fileOk ? 'ok' : 'not writable') + '): send the settings from your PC';
       } catch (e) {
-        status = "Helper not reachable at " + SERVICE + ' (' + (e.message || e) + ')';
+        status = 'Helper not reachable (' + (e.message || e) + '): ' + await brewStatus();
       }
       $('pick-where').textContent = 'Setup';
       $('pick-title').textContent = 'Not set up yet';
-      $('pick-reason').textContent = status + ' · ' + (TIZEN ? 'Tizen apps API available' : 'no Tizen apps API');
+      $('pick-reason').textContent = status;
       await new Promise((r) => setTimeout(r, 5000));
       cfg = await loadConfig();
     }
+    if (!appsKnown) findApps(() => { renderApps(); focus(); });   // the service is up now: the real app list
     const safely = (name, fn) => () => fn().catch((e) => warn(name, e));
     const wx = safely('weather', weather), hm = safely('home', home), tr = safely('trains', trains);
     wx(); hm(); tr();
