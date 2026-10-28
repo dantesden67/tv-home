@@ -4,6 +4,7 @@
  *  - POST /config  the settings, sent once from the PC (tools/push-config.js); kept in a file on the TV
  *  - GET  /home    who's home, from Home Assistant (the app can't call it directly: CORS)
  *  - GET  /trains  the next departures, from National Rail (CORS again, and the key stays out of the page)
+ *  - GET  /apps, /launch?id=  the TV's apps, and opening one (TizenBrew's pages have no tizen.application)
  * The settings hold keys, so they never go in the published module.
  */
 var http = require('http');
@@ -94,6 +95,21 @@ http.createServer(function (req, res) {
     var fileOk = true;
     try { fs.writeFileSync(FILE + '.test', '1'); fs.unlinkSync(FILE + '.test'); } catch (e) { fileOk = false; }
     return send(res, 200, { ok: true, node: process.version, fileOk: fileOk, hasConfig: !!config });
+  }
+  // The page can't use tizen.application inside TizenBrew; the service can.
+  if (path === '/apps' && isLocal(req)) {
+    try {
+      return tizen.application.getAppsInfo(function (list) {
+        send(res, 200, list.map(function (a) { return { id: a.id, name: a.name }; }));
+      }, function (e) { send(res, 500, { error: String(e) }); });
+    } catch (e) { return send(res, 500, { error: String(e) }); }
+  }
+  if (path === '/launch' && isLocal(req)) {
+    var id = decodeURIComponent((req.url.split('id=')[1] || '').split('&')[0]);
+    try {
+      return tizen.application.launch(id, function () { send(res, 200, { ok: true }); },
+        function (e) { send(res, 500, { error: String(e) }); });
+    } catch (e) { return send(res, 500, { error: String(e) }); }
   }
   if (path === '/home' && isLocal(req)) return home(res);
   if (path === '/trains' && isLocal(req)) return trains(res);
