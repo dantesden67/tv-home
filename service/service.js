@@ -165,13 +165,23 @@ function home(res) {
 function trains(res) {
   var t = config && config.trains;
   if (!t || !t.enabled) return send(res, 404, { error: 'Trains not set up' });
-  getJSON(t.url + t.from + '?numRows=10&filterCrs=' + t.to + '&filterType=to', { 'x-apikey': t.token }, function (err, b) {
-      if (err) return send(res, 502, { error: String(err) });
-      var departures = (b.trainServices || []).map(function (s) {
-        var status = s.etd === 'On time' ? 'On time' : /^\d/.test(s.etd) ? 'Expected ' + s.etd : s.etd;
-        return { time: s.std, status: status, late: s.etd !== 'On time' };
+  // The service answers 500 to its own filterCrs and to more than 10 rows, so: the next 10 departures with their
+  // calling points, keeping those that stop at the destination.
+  getJSON(t.url + t.from + '?numRows=10', { 'x-apikey': t.token }, function (err, b) {
+    if (err) return send(res, 502, { error: String(err) });
+    var name = t.to, departures = [];
+    (b.trainServices || []).forEach(function (s) {
+      var stop = null;
+      (s.subsequentCallingPoints || []).forEach(function (list) {
+        (list.callingPoint || []).forEach(function (c) { if (c.crs === t.to && !stop) stop = c; });
       });
-      send(res, 200, { to: b.filterLocationName || t.to, departures: departures });
+      if (!stop) return;
+      name = stop.locationName || name;
+      var status = s.isCancelled || s.etd === 'Cancelled' ? 'Cancelled'
+        : s.etd === 'On time' ? 'On time' : /^\d/.test(s.etd) ? 'Expected ' + s.etd : s.etd;
+      departures.push({ time: s.std, status: status, late: s.etd !== 'On time', arrive: stop.st, platform: s.platform || null });
+    });
+    send(res, 200, { to: name, departures: departures });
   });
 }
 

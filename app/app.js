@@ -148,7 +148,8 @@
       const row = el('div', 'row', box);
       el('b', null, row, d.time);
       const s = el('span', null, row, d.status);
-      s.style.color = d.late ? 'var(--late)' : 'var(--good)';
+      s.style.color = d.status === 'Cancelled' ? 'var(--bad)' : d.late ? 'var(--late)' : 'var(--good)';
+      if (d.arrive) el('small', 'muted', row, 'arrives ' + d.arrive);
     }
     box.hidden = false;
   }

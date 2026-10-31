@@ -7,7 +7,7 @@ const read = (name) => fs.readFileSync(path.join(ROOT, name), 'utf8').trim();
 // A key not made yet leaves its part of the screen off.
 const maybe = (name) => { try { return name ? read(name) : null; } catch (e) { return null; } };
 
-const RAIL = 'https://api1.raildata.org.uk/1010-live-departure-board-dep1_2/LDBWS/api/20220120/GetDepartureBoard/';
+const RAIL = 'https://api1.raildata.org.uk/1010-live-departure-board-dep1_2/LDBWS/api/20220120/GetDepBoardWithDetails/';
 
 function settings() {
   const c = JSON.parse(read('config.json'));

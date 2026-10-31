@@ -6,6 +6,7 @@
   --accent: #F2B544;
   --good: #8EF0B0;
   --late: #FFC489;
+  --bad: #FF8A8A;
 }
 
 html, body { margin: 0; background: var(--ground); overflow: hidden; }
@@ -40,6 +41,7 @@ header .spacer { flex-grow: 1; }
 .trains .row { display: flex; gap: 14px; align-items: baseline; font-size: 21px; padding-left: 38px; }
 .trains .row b { width: 62px; }
 .trains .row span { font-size: 18px; font-weight: 700; }
+.trains .row small { font-size: 17px; }
 
 #pick { position: absolute; left: 80px; top: 230px; width: 760px; display: flex; flex-direction: column; gap: 18px; }
 .where { font-size: 18px; font-weight: 800; letter-spacing: 1.5px; color: #FF7A7E; text-transform: uppercase; }

@@ -37,15 +37,22 @@ async function trains(res) {
   const t = settings().trains;
   if (!t.enabled) return json(res, 404, { error: 'Trains not set up' });
   try {
-    const r = await fetch(t.url + t.from + '?numRows=10&filterCrs=' + t.to + '&filterType=to', { headers: { 'x-apikey': t.token } });
+    const r = await fetch(t.url + t.from + '?numRows=10', { headers: { 'x-apikey': t.token } });
     if (!r.ok) return json(res, 502, { error: 'National Rail ' + r.status });
     const b = await r.json();
-    const departures = (b.trainServices || []).map((s) => ({
-      time: s.std,
-      status: s.etd === 'On time' ? 'On time' : /^\d/.test(s.etd) ? 'Expected ' + s.etd : s.etd,
-      late: s.etd !== 'On time'
-    }));
-    json(res, 200, { to: b.filterLocationName || t.to, departures });
+    let name = t.to;
+    const departures = [];
+    for (const s of b.trainServices || []) {
+      const stop = [].concat(...(s.subsequentCallingPoints || []).map((l) => l.callingPoint || [])).find((c) => c.crs === t.to);
+      if (!stop) continue;
+      name = stop.locationName || name;
+      departures.push({
+        time: s.std,
+        status: s.isCancelled || s.etd === 'Cancelled' ? 'Cancelled' : s.etd === 'On time' ? 'On time' : /^\d/.test(s.etd) ? 'Expected ' + s.etd : s.etd,
+        late: s.etd !== 'On time', arrive: stop.st, platform: s.platform || null
+      });
+    }
+    json(res, 200, { to: name, departures });
   } catch (e) {
     json(res, 502, { error: String(e) });
   }
